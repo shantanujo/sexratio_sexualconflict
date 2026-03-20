@@ -1,7 +1,6 @@
-### This folder contains raw data files for single species trials, mixed species trials and count data.
+## This folder contains raw data files for single species trials, mixed species trials and count data.
 
-
-## Explanation of column names:
+### Explanation of column names in data files:
 "`single_species_trials.csv`":\
 Cage.no = Cage ID, 	sp = Species: EXS- exsulans, and TRA- traviatum, 	date = Date of trial start, 	no_male = Treatment: No. of males, 	eggs = Number of eggs, 	larvae = Number of larva, 	tand = If Tandem/Copula was observed, 	ferti = Fertility, 	female_surv = Female dead or alive, 	mat_th = Mating attempts on thorax.
 
