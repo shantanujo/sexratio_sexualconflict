@@ -1,55 +1,14 @@
-setwd("C:/Users/shant/Documents/R/cage_final")
-library(ggeffects)
+setwd("C:/Users/shant/Documents/SexualConflict_Manuscript/latest/final_ms")
+
+library(data.table)
 library(tidyverse)
-library(dplyr)
 library(lme4)
-library(DHARMa)
-library(sjPlot)
-library(mgcv)
-library(sjPlot)
-library(mgcViz)
 library(glmmTMB)
-library(broom)
-library(car)    
-library(emmeans) 
-library(multcomp)
-
-##########       SINGLE  SPECIES   ##########
-##sex ratio counts
-newcount = readRDS("finalcount.RDS")
-colnames(newcount)[13]= "ratio"
-## cage trial data, mix= both species
-#cagef <- read.csv("singlesp_25.csv")
-#cagef$ferti <- cagef$larvae / cagef$eggs
-caged = readRDS("singlesp.RDS")
-caged <- caged %>%
-  mutate(
-    sp       = factor(sp),
-    date_cat = factor(date_cat),
-    obs      = factor(obs),
-    no_male =factor(no_male),
-    date_cat = factor(date_cat)
-  )
-cagea <- subset(caged, !eggs== '0')
-cage <- subset(caged, female_dead== 'N')
-
-### Mix Species ###
-mix = readRDS("mixsp.RDS")
-mix <- mix %>%
-  mutate(
-    female_sp       = factor(female_sp),
-    obs      = factor(obs),
-    con_male =factor(con_male)
-  )
-mix$tot_th = mix$th_con + mix$th_het
-
-
-
-######  Sex Ratio   ####
-
-#Fishers exact
-# Create contingency table (rows = species, cols = sex)
-library(dplyr)
+library(emmeans)
+library(ggeffects)
+setwd("~/data")
+##########       Sex  Ratio    ##########
+newcount = fread("sex_ratio_counts.csv")
 agg <- newcount %>%
   group_by(sp) %>%
   summarise(   males   = sum(males),    females = sum(females),    total   = males + females)
@@ -62,166 +21,144 @@ mat <- matrix(
 rownames(mat) <- levels(newcount$sp)
 colnames(mat) <- c("Male", "Female")
 
-# Run Fisher's exact test (one‐sided)
-res_fisher <- fisher.test(mat, alternative = "less")
+res_fisher <- fisher.test(mat, alternative = "less")  # Run Fisher's exact test (one‐sided)
 res_fisher
-# Perform two‐sample proportion test
-res_prop <- with(agg,
+res_prop <- with(agg,    # Perform two‐sample proportion test
                  prop.test(
-                   x = males,
-                   n = total,
-                   alternative = "less",
-                   correct     = FALSE  ))
-res_prop
-
-##Sex ratio final model
+                   x = males, n = total, alternative = "less", correct     = FALSE  ))
 datemod= glmer(data=newcount, cbind(males,females) ~ sp *(1|date_j), family=binomial)
-summary(datemod)
-# profile likelihood CIs
 exp(confint(datemod, parm="beta_", method="profile"))
+newcount %>%group_by(sp) %>%    # adding columns for Fig 1b
+  summarise(n       = n(),
+            mean    = mean(ratio, na.rm = TRUE),
+            sd      = sd(ratio, na.rm = TRUE),
+            se      = sd / sqrt(n),
+            ci_lower = mean - qt(0.975, df = n - 1) * se,
+            ci_upper = mean + qt(0.975, df = n - 1) * se ) 
 
 
+##########       SINGLE  SPECIES TRIALS   ##########
+caged <- fread("single_species_trials.csv") %>%
+  mutate(
+    sp      = factor(sp),no_male = factor(no_male)  )
 
-#####  SURVIVAL ANALYSIS   ######
+# Drop unused levels within species
+caged <- caged %>% group_by(sp) %>%mutate(no_male = droplevels(no_male))%>% ungroup()
+levels(droplevels(caged$no_male[caged$sp == "TRA"]))  # should be "1" "4"
+
+#####  Survival   ######
 mod_surv <- glmer(female_surv ~ no_male * sp + (1 | date_j),
-                data    = caged,
-                family  = binomial,
-                control = glmerControl(
-                  optimizer        = "bobyqa",
-                  optCtrl          = list(maxfun = 2e5)
-                ))
+                  data    = caged, family  = binomial,control = glmerControl(optimizer= "bobyqa",
+                    optCtrl= list(maxfun = 2e5)
+                  ))
+mod_surv1 <- glmer(female_surv ~ no_male * sp +mat_th+ (1 | date_j),
+                  data    = caged,
+                  family  = binomial,
+                  control = glmerControl(
+                    optimizer        = "bobyqa",
+                    optCtrl          = list(maxfun = 2e5)
+                  ))
+anova(mod_surv, mod_surv1, test = "Chisq")
 
-# assume fem_death: 1 = died, 0 = survived
 raw_surv <- caged %>%
   group_by(no_male, sp) %>%
-  summarise(
-    n_total    = n(),
+  summarise(n_total = n(),
     n_survived = sum(female_surv == 1),
-    prop_surv  = n_survived / n_total
-  ) %>%
-  ungroup()
-emm <- emmeans(mod_surv,
-               ~ sp | no_male,
-               type = "response")
-
-# convert to data frame for ggplot
+    prop_surv  = n_survived / n_total) %>%ungroup()
+emm <- emmeans(mod_surv, ~ sp | no_male,type = "response")
 emm_df <- as.data.frame(emm) %>%
-  rename(
-    prop_surv = prob,
+  rename( prop_surv = prob,
     lower     = asymp.LCL,
-    upper     = asymp.UCL
-  )
+    upper     = asymp.UCL)
 
-######     FECUNDITY    #######
+######     Fecundity    #######
+cage2 <- subset(caged, female_surv== '1') #keeping only females that survived
 eggmod <- glmmTMB(
-  eggs ~ sp*no_male + (1|date_j),
-  family = nbinom2,ziformula = ~no_male*sp,
-  data   = caged)
+  eggs ~ no_male*sp + (1|date_j),
+  family = nbinom2,ziformula = ~sp,
+  data   = cage2)
+summary(eggmod)$coefficients$cond
+summary(eggmod)$coefficients$zi
+#comparing models with and without mating attempts
+eggmod1 <- glmmTMB(
+  eggs ~ no_male*sp + mat_th+(1|date_j),
+  family = nbinom2,ziformula = ~sp,
+  data   = cage2)
+anova(eggmod, eggmod1, test = "Chisq")
 
-# Generate prediction data
 preds <- ggpredict(eggmod, terms = c( "no_male", "sp"))
-# Filter out the unsupported combination
+# Filter out the unwanted combination
 preds_filtered <- subset(preds, !(x == "6" & group == "TRA"))
 colnames(preds_filtered)[1] = "no_male"
-# Plot: point-range grouped by species, color by no_male
-caged$group=caged$sp
 preds_filtered$sp = preds_filtered$group
 
-cagedf <- caged %>%
-  filter(!(sp == "TRA" & no_male == 6))
-preds_filtered <- preds_filtered %>%
-  filter(!(sp == "TRA" & no_male == 6))
+##### Fertility   ###
+cage3 <- subset(caged, eggs >0) # for fertility analysis
 
+cage3$failures = cage3$eggs - cage3$larvae
 
-
-##### FERTILITY   ###
-caged2=cagea
-lar = caged2$larvae
-fail = caged2$failures
-## larvae Conspecific
-larmod <- glmmTMB(
-  cbind(larvae, failures) ~ no_male * sp + (1 | date_j),
-  family = betabinomial(),
-  data = caged2
-)
-preds1 <- ggpredict(larmod, terms = c("no_male", "sp"))
-# Filter out unsupported combinations (e.g., TRA × 6)
-preds_filtered1 <- subset(preds1, !(group == "TRA" & x == "6"))
-caged2$group=caged2$sp
-preds_filtered1$sp = preds_filtered1$group
-
-
+larmod <- glmer(cbind(larvae, failures) ~ no_male * sp + (1 | date_j), data = cage3, family = binomial)
+larmoda <- glmer(cbind(larvae, failures) ~ no_male * sp +mat_th + (1 | date_j), data = cage3, family = binomial)
+anova(larmoda, larmod, test="LRT")
+summary(larmod)
+preds1 <- ggpredict(larmod, terms = c( "no_male", "sp"))
+# Filter out the unsupported combination
+preds_filtered1 <- subset(preds1, !(x == "6" & group == "TRA"))
+colnames(preds_filtered1)[1] = "no_male"
+preds_filtered1$sp = preds_filtered$group
 
 ###########     'MIXED'   SPECIES   ############
-
-mix$sp <- as.factor(mix$sp)
-mix$no_male <- as.factor(mix$no_male)
-mix$female_sp <- as.factor(mix$female_sp)
-mix$con_male <- as.factor(mix$con_male)
-mix$ferti <- mix$larvae / mix$eggs
-mix$date= as.Date(mix$date,format= "%m/%d/%Y")
-mix$date_j = as.POSIXlt(mix$date,format = "%d%b%y")$yday
-mix[is.na(mix$eggs)] <- 0
-mix[is.na(mix$larvae)] <- 0
-levels(mix$female_sp) <- c("EXS", "TRA")
-mix <- mix |>
-  mutate(ratio2 = factor(con_male, levels = c(1, 3), labels = c("1:3", "3:1")))
-
-mix2 <- subset(mix, !eggs== '0')
-mix3 <- subset(mix, female_d== '1')
-
-god_s2 <- glmer(female_d ~ ratio2 * female_sp + (1 | date_j),
+mix = fread("mixed_species_trials.csv") 
+mix <- mix %>%
+  mutate(  female_sp    = factor(female_sp),
+    con_male =factor(con_male),
+    ratio =factor(ratio2) )
+#Survival
+mod_surv2 <- glmer(female_surv ~ ratio * female_sp + (1 | date_j),
                 data    = mix,
                 family  = binomial,
                 control = glmerControl(
                   optimizer        = "bobyqa",
                   optCtrl          = list(maxfun = 2e5)
                 ))
-emm2 <- emmeans(god_s2,
-                ~ female_sp | ratio2,
-                type = "response")
-
+emm2 <- emmeans(mod_surv2, ~ female_sp | ratio,type = "response")
+summary(mod_surv2)
 # convert to data frame for ggplot
 emm_df2 <- as.data.frame(emm2) %>%
-  rename(
-    prop_surv = prob,
+  rename(  prop_surv = prob,
     lower     = asymp.LCL,
-    upper     = asymp.UCL
-  )
-pd <- position_dodge(width = 0.6)
-
-
+    upper     = asymp.UCL)
 
 #### FECUNDITY ####
-eggmod_nb_mix <- glmmTMB(
-  eggs ~ ratio2*female_sp + (1|date_j),
-  family = nbinom2,ziformula = ~con_male*female_sp,
-  data   = mix)
-
-predsa <- ggpredict(eggmod_nb_mix, terms = c("ratio2", "female_sp"))
+mix2 <- subset(mix, female_surv== '1')
+eggmod_mix <- glmmTMB(
+  eggs ~ ratio*female_sp + (1|date_j),
+  family = nbinom2,ziformula = ~female_sp,
+  data   = mix2)
+summary(eggmod_mix)$coefficients$cond
+summary(eggmod_mix)$coefficients$zi
+predsa <- ggpredict(eggmod_mix, terms = c("ratio", "female_sp"))
+colnames(predsa)[1] = "ratio"
 predsa$female_sp = predsa$group
 
 #### FERTILIITY ####
-mix2 =filter(mix, eggs>0)
-mix2$failures = mix2$eggs - mix2$larvae
-larmod1 <- glmmTMB(
-  cbind(larvae, failures) ~ ratio2 * female_sp + (1 | date_j),
-  family = betabinomial(),
-  data = mix2
-)
-preds2 <- ggpredict(
-  larmod1,
-  terms = c("ratio2", "female_sp"),
-  type = "fixed"
-)
-preds2$sp <- preds2$group
+mix3 <- subset(mix, eggs > 0) 
+mix3$failures = mix3$eggs - mix3$larvae
+larmod1 <- glmer(cbind(larvae, failures) ~ ratio * female_sp + (1 | date_j), data = mix3, family = binomial)
+larmod2 <- glmer(cbind(larvae, failures) ~ ratio * female_sp+tot_th + (1 | date_j), data = mix3, family = binomial)
+anova(larmod1, larmod2)
+summary(larmod1)
+predsb <- ggpredict(larmod1, terms = c("ratio", "female_sp"))
+colnames(predsb)[1] = "ratio"
+predsb$female_sp = predsb$group
 
+emm <- emmeans(larmod, ~ no_male*sp)
+pairs(emm)
 
 ###### FIGURES  #####
-
-# FIG 1 a  -  ratio plot
 species_palette <- c("EXS" = "#cc9200", "TRA" = "#9200cc")
 
+# Fig 1a
 ggplot(newcount, aes(x = sp, y = ratio)) +
   geom_jitter(width = 0.08, alpha = 0.6, color="gray50")+
   stat_summary(
@@ -240,19 +177,7 @@ ggplot(newcount, aes(x = sp, y = ratio)) +
   scale_y_continuous(limits = c(0, 7), breaks = seq(0, 7, by = 1))+
   scale_color_manual(values = species_palette) +guides(color = "none")
 
-### Fig. 1B
-#summary stats
-newcount %>%
-  group_by(sp) %>%
-  summarise(
-    n       = n(),
-    mean    = mean(ratio, na.rm = TRUE),
-    sd      = sd(ratio, na.rm = TRUE),
-    se      = sd / sqrt(n),
-    ci_lower = mean - qt(0.975, df = n - 1) * se,
-    ci_upper = mean + qt(0.975, df = n - 1) * se
-  ) 
-
+### Fig. 1b
 ggplot(newcount, aes(x=date_j, y=ratio, col=sp)) + geom_jitter(width = 0.1, alpha = 0.5, size=2.2) +
   geom_smooth(method="loess", span=0.9, linewidth=1.4) +
   scale_color_manual(values = species_palette) + 
@@ -261,29 +186,23 @@ ggplot(newcount, aes(x=date_j, y=ratio, col=sp)) + geom_jitter(width = 0.1, alph
   guides(color = "none")
 
 ###Fig 2a
-# dodge width for side-by-side points
+# dodge width for overlapping points
 pd <- position_dodge(width = 0.6)
-
 fig2a=ggplot()+
-  geom_point(
-    data    = emm_df,
+  geom_point(data    = emm_df,
     aes(x = factor(no_male), y = prop_surv, color = sp),
     shape    = 18,
     size     = 8,
-    position = pd
-  ) +
-  # error bars for emmeans CIs
+    position = pd ) + # error bars for emmeans CIs
   geom_errorbar(
     data    = emm_df,
     aes(x = factor(no_male), ymin = lower, ymax = upper, color = sp),
     width    = 0,linewidth=1.2,
-    position = pd
-  ) +
+    position = pd) +
   scale_y_continuous(
     name    = "Survival Probability",
     limits  = c(0,1),
-    breaks  = seq(0,1,0.2)
-  ) +
+    breaks  = seq(0,1,0.2)) +
   xlab("Number of Males") +
   labs(color = "Species") +
   theme_classic(base_size = 14) + scale_color_manual(values = species_palette)+
@@ -293,25 +212,20 @@ fig2a
 
 #Fig2b
 fig2b=ggplot()+
-  geom_point(
-    data    = emm_df2,
-    aes(x = factor(ratio2), y = prop_surv, color = female_sp),
+  geom_point( data    = emm_df2,
+    aes(x = factor(ratio), y = prop_surv, color = female_sp),
     shape    = 18,
     size     = 8,
-    position = pd
-  ) +
-  # error bars for emmeans CIs
+    position = pd) + # error bars for emmeans CIs
   geom_errorbar(
     data    = emm_df2,
-    aes(x = factor(ratio2), ymin = lower, ymax = upper, color = female_sp),
+    aes(x = factor(ratio), ymin = lower, ymax = upper, color = female_sp),
     width    = 0,linewidth=1.2,
-    position = pd
-  ) +
+    position = pd) +
   scale_y_continuous(
     name    = "Survival Probability",
     limits  = c(0,1),
-    breaks  = seq(0,1,0.2)
-  ) +
+    breaks  = seq(0,1,0.2) ) +
   xlab("Conspecific: Heterospecific Male Ratio") +
   labs(color = "Species") +
   theme_classic(base_size = 14) + scale_color_manual(values = species_palette)+
@@ -320,86 +234,95 @@ fig2b=ggplot()+
 fig2b
 
 #Fig 3a
-fig3a= ggplot() +
-  # Jittered raw data in the background
-  geom_jitter(data = cagedf, aes(x = no_male, y = eggs), 
-              width = 0.15, colour = "black", size = 2, alpha = 0.2) +
-  # Prediction points and error bars in the foreground
-  geom_point(data = preds_filtered, 
-             aes(x = no_male, y = predicted, color=sp), 
-             position = position_dodge(width = 0.5), size = 8, shape=18)  + 
+fig3a <- ggplot() +
+  geom_jitter(
+    data = cage2,
+    aes(x = no_male, y = eggs),
+    width = 0.15, size = 2, alpha = 0.2  ) +
+  geom_point(
+    data = preds_filtered,
+    aes(x = no_male, y = predicted, color = factor(sp)),
+    position = position_dodge(width = 0.4),
+    size = 7, shape = 18
+  ) +
   geom_errorbar(
     data = preds_filtered,
-    aes(x = no_male, ymin = conf.low, ymax = conf.high, color = sp),
+    aes(x = no_male, ymin = conf.low, ymax = conf.high, color = factor(sp)),
     position = position_dodge(width = 0.5),
-    width = 0, linewidth = 1.4)+
+    width = 0,
+    linewidth = 1.3) +
+  facet_grid(. ~ sp, scales = "free_x", space = "free_x") +
   labs(x = "No. of Males", y = "No. of Eggs") +
-  guides(color = "none")+
-  theme_classic(base_size = 13) +
-  facet_wrap(~group, scales="free_x") + scale_color_manual(values = species_palette)+
+  theme_classic(base_size = 12) + scale_color_manual(values = species_palette)+
   theme(strip.background = element_blank())+
   guides(color="none")
 fig3a
 
+
 # Fig 3b
-fig3b= ggplot() +
-  # Jittered raw data in the background
-  geom_jitter(data = mix, aes(x = ratio2, y = eggs), 
+fig3b= ggplot() + # Jittered raw data in the background
+  geom_jitter(data = mix2, aes(x = ratio, y = eggs, color=factor(female_sp)), 
               width = 0.15, colour = "black", size = 2, alpha = 0.2) +
   # Prediction points and error bars in the foreground
   geom_point(data = predsa, 
-             aes(x = x, y = predicted, color = factor(female_sp)), 
-             position = position_dodge(width = 0.4), size = 8, shape=18)  + 
+             aes(x = ratio, y = predicted, color = factor(female_sp)), 
+             position = position_dodge(width = 0.4), size = 7, shape=18)  + 
   geom_errorbar(data = predsa, 
-                aes(x = x, ymin = conf.low, ymax = conf.high, color = factor(female_sp)), 
-                position = position_dodge(width = 0.5), width = 0, linewidth=1.5) +
+                aes(x = ratio, ymin = conf.low, ymax = conf.high, color = factor(female_sp)), 
+                position = position_dodge(width = 0.5), width = 0, linewidth=1.4) +
   labs(x = "Conspecific: Heterospecific Male Ratio", y = "No. of Eggs", color = "") +
-  theme_classic(base_size = 13) +
-  facet_wrap(~group)+ scale_color_manual(values = species_palette)+
+  theme_classic(base_size = 12) +
+  facet_wrap(~female_sp)+ scale_color_manual(values = species_palette)+
   theme(strip.background = element_blank())+
   guides(color="none")
 fig3b
+
 # Fig 3c
-fig3c=ggplot() +
-  geom_jitter(data = caged2, aes(x = no_male, y = ferti), 
-              width = 0.15, colour = "black", size = 2, alpha = 0.2) +
-  geom_point(data = preds_filtered1, 
-             aes(x = x, y = predicted, color=factor(sp)), 
-             position = position_dodge(width = 0.5), size = 8, shape=18) +
+fig3c <- ggplot() +
+  geom_jitter(
+    data = cage3,
+    aes(x = no_male, y = ferti),
+    width = 0.15, size = 2, alpha = 0.2 ) +
+  geom_point(
+    data = preds_filtered1,
+    aes(x = no_male, y = predicted, color = factor(sp)),
+    position = position_dodge(width = 0.5),
+    size = 7, shape = 18) +
   geom_errorbar(
     data = preds_filtered1,
-    aes(x = x, ymin = conf.low, ymax = conf.high, color = factor(sp)),
+    aes(x = no_male, ymin = conf.low, ymax = conf.high, color = factor(sp)),
     position = position_dodge(width = 0.5),
     width = 0,
-    linewidth = 1.3 )+
-  labs(x = "No. of Males", y = "Fertility", color = "") +
-  theme_classic(base_size = 13) +
-  facet_wrap(~group, scales="free_x") +
-  scale_color_manual(values = species_palette)+
+    linewidth = 1.4 ) +
+  facet_grid(. ~ sp, scales = "free_x", space = "free_x") +
+  labs(x = "No. of Males", y = "Fertility") +
+  theme_classic(base_size = 12) + scale_color_manual(values = species_palette)+
   theme(strip.background = element_blank())+
   guides(color="none")
 fig3c
+
 # Fig 3d
 fig3d= ggplot() +
   # Jittered raw data in the background
-  geom_jitter(data = mix2, aes(x = ratio2, y = ferti), 
+  geom_jitter(data = mix3, aes(x = ratio, y = ferti), 
               width = 0.15, colour = "black", size = 2, alpha = 0.2) +
   # Prediction points and error bars in the foreground
-  geom_point(data = preds2, 
-             aes(x = x, y = predicted, color = factor(sp)), 
-             position = position_dodge(width = 0.5), size = 8, shape=18)  + 
-  geom_errorbar(data = preds2, 
-                aes(x = x, ymin = conf.low, ymax = conf.high, color = factor(sp)), 
+  geom_point(data = predsb, 
+             aes(x = ratio, y = predicted, color = factor(female_sp)), 
+             position = position_dodge(width = 0.5), size = 7, shape=18)  + 
+  geom_errorbar(data = predsb, 
+                aes(x = ratio, ymin = conf.low, ymax = conf.high, color = factor(female_sp)), 
                 position = position_dodge(width = 0.5), width = 0, linewidth=1.4) +
   labs(x = "Conspecific: Heterospecific Male Ratio", y = "Fertility", color = "") +
-  theme_classic(base_size = 13) +
-  facet_wrap(~group)+ scale_color_manual(values = species_palette)+
+  theme_classic(base_size = 12) +
+  facet_wrap(~female_sp)+ scale_color_manual(values = species_palette)+
   theme(strip.background = element_blank())+
   guides(color="none")
 fig3d
 
-###      ###SUPPLEMENTARY FIGURE     ###
-ten=  read.csv("tenerals_2024.csv")
+
+##### SUPPLEMENTARY FIGURE  #####
+ten=  read.csv("~/supplementary/tenerals_2024.csv")
 levels(ten$Sp)= c("EXS", "TRA")
 ten <- ten %>%
   mutate(  Sp = recode(Sp,    "ENEX" = "EXS",
@@ -415,9 +338,7 @@ ten2 <- ten %>%
     values_from = Count,
     values_fill = 0
   ) %>%
-  mutate(
-    ratio = M / F
-  )
+  mutate(ratio = M / F )
 
 species_palette <- c("EXS" = "#cc9200", "TRA" = "#9200cc")
 ggplot(ten2, aes(x=Sp, y=ratio, col=Sp)) +
