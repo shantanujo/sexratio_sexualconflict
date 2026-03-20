@@ -322,7 +322,7 @@ fig3d
 
 
 ##### SUPPLEMENTARY FIGURE  #####
-ten=  read.csv("~/supplementary/tenerals_2024.csv")
+ten=  read.csv("~/SexualConflict_Manuscript/latest/final_ms/supplementary/tenerals_2024.csv")
 levels(ten$Sp)= c("EXS", "TRA")
 ten <- ten %>%
   mutate(  Sp = recode(Sp,    "ENEX" = "EXS",
@@ -342,7 +342,7 @@ ten2 <- ten %>%
 
 species_palette <- c("EXS" = "#cc9200", "TRA" = "#9200cc")
 ggplot(ten2, aes(x=Sp, y=ratio, col=Sp)) +
-  stat_summary(fun.data = "mean_se", geom = "pointrange", size=1.5, linewidth=1.2) +
+  stat_summary(fun.data = "mean_se", geom = "pointrange", size=1.7, linewidth=1.2, shape=18) +
   xlab("Species") + ylab("Immature Sex Ratio") + ylim(0,2)+
   theme(text = element_text(size=22)) + scale_color_brewer(palette="Dark2") + theme_classic()+
   geom_jitter(alpha=0.4, width=0.1)+
